@@ -801,14 +801,15 @@ async def main():
     bot_app.add_handler(CallbackQueryHandler(handle_video_button, pattern="^get_video:"))
     bot_app.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, handle_link))
 
-    # Pehle initialize karo — phir start karo (order zaroori hai!)
+    # Pehle initialize
     await bot_app.initialize()
 
-    await asyncio.gather(
-        userbot.start(),
-        bot_app.start(),
-        bot_app.updater.start_polling(),
-    )
+    # Userbot start karo
+    await userbot.start()
+
+    # Bot A start karo — drop_pending_updates=True se purane conflicts clear honge
+    await bot_app.start()
+    await bot_app.updater.start_polling(drop_pending_updates=True)
 
     logger.info("✅ Bot chal raha hai!")
     await asyncio.Event().wait()
