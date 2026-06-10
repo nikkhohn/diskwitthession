@@ -51,6 +51,10 @@ request_queue = deque()
 is_processing = False
 queue_lock = asyncio.Lock()
 
+# Channel video event globals
+pending_channel_event = None
+pending_channel_result = None
+
 # ============================================================
 #                    DATABASE
 # ============================================================
@@ -183,6 +187,31 @@ userbot = Client(
 bot_app = Application.builder().token(BOT_TOKEN).build()
 
 # ============================================================
+#     USERBOT — TOP LEVEL CHANNEL LISTENER (Permanent Handler)
+# ============================================================
+
+@userbot.on_message(filters.video)
+async def on_any_video(client, message):
+    """Har video message catch karo — channel wala filter karenge"""
+    global pending_channel_event, pending_channel_result
+
+    # Sirf tera database channel ka video chahiye
+    chat_id = message.chat.id
+    # Pyrogram mein private channel ID negative hoti hai same as -100xxxxx
+    if chat_id != DB_CHANNEL_ID:
+        return
+
+    if pending_channel_event is None:
+        return  # Koi request nahi hai abhi
+
+    # Video mil gayi!
+    logger.info(f"✅ Channel pe video detect hui! msg_id={message.id}")
+    pending_channel_result["id"] = message.id
+    pending_channel_event.set()
+    pending_channel_event = None
+    pending_channel_result = None
+
+# ============================================================
 #                    HELPERS
 # ============================================================
 
@@ -222,6 +251,13 @@ async def update_queue_messages():
             logger.warning(f"Queue msg update failed: {e}")
 
 # ============================================================
+#         USERBOT — CHANNEL PE VIDEO DETECT KARO (TOP LEVEL)
+# ============================================================
+
+# Pyrogram channel ID = -100 hatao
+PYROGRAM_CHANNEL_ID = int(str(DB_CHANNEL_ID).replace("-100", ""))
+
+# ============================================================
 #                    QUEUE PROCESSOR
 # ============================================================
 
@@ -253,16 +289,16 @@ async def process_next_in_queue():
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # Event — jab channel pe video aaye
+        # Event + asyncio queue for channel video
         video_received = asyncio.Event()
         channel_msg_id = {}
 
-        # ── Channel pe video ka wait karo ──
-        @userbot.on_message(filters.chat(DB_CHANNEL_ID) & filters.video)
-        async def channel_video_listener(client, message):
-            channel_msg_id["id"] = message.id
-            video_received.set()
-            userbot.remove_handler(channel_video_listener, 0)
+        # ── Permanent handler se signal lenge (registered at top level) ──
+        # Yahan ek asyncio Event use karenge
+        # Global pending_channel_event set karo
+        global pending_channel_event, pending_channel_result
+        pending_channel_event = video_received
+        pending_channel_result = channel_msg_id
 
         # Bot B ko link bhejo
         await userbot.send_message(BOT_B_USERNAME, link)
@@ -278,7 +314,8 @@ async def process_next_in_queue():
         try:
             await asyncio.wait_for(video_received.wait(), timeout=180)
         except asyncio.TimeoutError:
-            userbot.remove_handler(channel_video_listener, 0)
+            pending_channel_event = None
+            pending_channel_result = None
             await bot_app.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg_id,
