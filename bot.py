@@ -25,8 +25,9 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 123456789))
 
 BOT_B_USERNAME = "BookTherepybot"
-FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "")  # e.g. "@YourChannel" or "" to disable
-DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 10))  # Per user daily download limit
+STREAM_BOT_USERNAME = "aishwariyaupdatesbot"  # Stream bot
+FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "")
+DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 10))
 
 SETTINGS_FILE = "settings.json"
 DB_FILE = "bot.db"
@@ -145,9 +146,9 @@ def get_stats():
 
 def load_settings():
     default = {
-        "caption": "🎬 *{filename}*\n\n📥 Downloaded by @YourBot\n💫 Enjoy!",
+        "caption": "🎬 *{filename}*\n\n▶️ Stream Link: {stream_link}\n\n💫 Enjoy!",
         "thumbnail": None,
-        "welcome_msg": "👋 *Welcome!*\n\nMujhe Diskwala link bhejo, main video bhej dunga!\n\n🔗 Format:\n`https://www.diskwala.com/app/XXXXXX`"
+        "welcome_msg": "👋 *Welcome!*\n\nMujhe Diskwala link bhejo, main stream link bhej dunga!\n\n🔗 Format:\n`https://www.diskwala.com/app/XXXXXX`"
     }
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, 'r') as f:
@@ -165,7 +166,14 @@ init_db()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# pending_requests: BookTherepybot se video ka wait
+# Key: sent message id to BookBot, Value: user info
 pending_requests = {}
+
+# stream_pending: aishwariyaupdatesbot se stream link ka wait
+# Key: forwarded message id to stream bot, Value: user info + filename
+stream_pending = {}
+
 download_queue = asyncio.Queue()
 
 userbot = Client(
@@ -240,7 +248,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Daily limit check
     if not is_admin(user_id):
         today_count = get_today_downloads(user_id)
         if today_count >= DAILY_LIMIT:
@@ -260,10 +267,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Queue position
     queue_pos = download_queue.qsize() + 1
     if queue_pos > 1:
-        msg = await update.message.reply_text(f"📋 *Queue mein hai tera request!*\n\n🔢 Position: #{queue_pos}\n⏳ Thoda wait karo...", parse_mode=ParseMode.MARKDOWN)
+        msg = await update.message.reply_text(
+            f"📋 *Queue mein hai tera request!*\n\n🔢 Position: #{queue_pos}\n⏳ Thoda wait karo...",
+            parse_mode=ParseMode.MARKDOWN
+        )
     else:
         msg = await update.message.reply_text("⏳ Processing... thoda wait karo!")
 
@@ -290,7 +299,7 @@ async def process_queue():
             await bot_app.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg_id,
-                text="⏳ Bot B ko bhej raha hoon..."
+                text="⏳ Video fetch kar raha hoon..."
             )
             sent = await userbot.send_message(BOT_B_USERNAME, link)
             pending_requests[sent.id] = {
@@ -308,6 +317,129 @@ async def process_queue():
             )
         finally:
             download_queue.task_done()
+
+# ============================================================
+#    STEP 1: BookTherepybot se video milna
+#    → Video ko aishwariyaupdatesbot ko forward karo
+# ============================================================
+
+@userbot.on_message(filters.user(BOT_B_USERNAME) & filters.video)
+async def receive_video_from_bookbot(client: Client, message: Message):
+    if not pending_requests:
+        logger.warning("Video aayi par pending_requests khali hai!")
+        return
+
+    oldest_key = next(iter(pending_requests))
+    req = pending_requests.pop(oldest_key)
+    user_chat_id = req["user_chat_id"]
+    user_id = req["user_id"]
+    proc_msg_id = req["processing_msg_id"]
+    link = req["link"]
+
+    try:
+        await bot_app.bot.edit_message_text(
+            chat_id=user_chat_id,
+            message_id=proc_msg_id,
+            text="📤 Stream link generate ho rahi hai... thoda ruko!"
+        )
+
+        filename = (message.video.file_name or "video.mp4").replace("Diskwala_File_", "").replace(".mp4", "")
+
+        # Video ko stream bot ko forward karo
+        forwarded = await message.forward(STREAM_BOT_USERNAME)
+
+        # Stream bot ke reply ka wait karenge stream_pending mein
+        stream_pending[forwarded.id] = {
+            "user_chat_id": user_chat_id,
+            "user_id": user_id,
+            "processing_msg_id": proc_msg_id,
+            "link": link,
+            "filename": filename
+        }
+
+        logger.info(f"Video forwarded to stream bot. forwarded.id={forwarded.id}")
+
+    except Exception as e:
+        logger.error(f"Stream bot ko forward karne mein error: {e}")
+        await bot_app.bot.edit_message_text(
+            chat_id=user_chat_id,
+            message_id=proc_msg_id,
+            text="❌ Stream link generate nahi hui! Dobara try karo."
+        )
+
+# ============================================================
+#    STEP 2: aishwariyaupdatesbot se stream link milna
+#    → User ko link bhejo
+# ============================================================
+
+@userbot.on_message(filters.user(STREAM_BOT_USERNAME) & filters.text)
+async def receive_stream_link(client: Client, message: Message):
+    if not stream_pending:
+        logger.warning("Stream bot ne message bheja par stream_pending khali hai!")
+        return
+
+    import re
+    text = message.text or ""
+    urls = re.findall(r'https?://\S+', text)
+
+    if not urls:
+        logger.warning(f"Stream bot ke message mein koi link nahi mila: {text}")
+        return
+
+    stream_link = urls[0]
+
+    oldest_key = next(iter(stream_pending))
+    req = stream_pending.pop(oldest_key)
+
+    user_chat_id = req["user_chat_id"]
+    user_id = req["user_id"]
+    proc_msg_id = req["processing_msg_id"]
+    link = req["link"]
+    filename = req["filename"]
+
+    try:
+        caption = settings["caption"].format(
+            filename=filename,
+            stream_link=stream_link
+        )
+
+        await bot_app.bot.send_message(
+            chat_id=user_chat_id,
+            text=caption,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=False
+        )
+
+        try:
+            await bot_app.bot.delete_message(chat_id=user_chat_id, message_id=proc_msg_id)
+        except:
+            pass
+
+        log_download(user_id, link)
+
+        await bot_app.bot.send_message(
+            ADMIN_ID,
+            f"📥 *New Stream Request!*\n\n"
+            f"👤 User ID: `{user_id}`\n"
+            f"🎬 File: `{filename}`\n"
+            f"🔗 Diskwala: `{link}`\n"
+            f"▶️ Stream: {stream_link}\n"
+            f"📅 Time: `{datetime.now().strftime('%d/%m/%Y %H:%M')}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        logger.info(f"Stream link user {user_id} ko bhej di: {stream_link}")
+
+    except Exception as e:
+        logger.error(f"User ko stream link bhejne mein error: {e}")
+        try:
+            await bot_app.bot.edit_message_text(
+                chat_id=user_chat_id,
+                message_id=proc_msg_id,
+                text="❌ Stream link bhejne mein error! Dobara try karo."
+            )
+        except:
+            pass
 
 # ============================================================
 #                    ADMIN PANEL
@@ -351,8 +483,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["admin_action"] = "caption"
         await query.edit_message_text(
             "✏️ *Naya Caption Bhej*\n\n"
-            "💡 `{filename}` = video ka naam\n\n"
-            "Example:\n`🎬 {filename}\n\n💫 Enjoy!`\n\n/cancel",
+            "💡 Variables:\n"
+            "`{filename}` = video ka naam\n"
+            "`{stream_link}` = stream link\n\n"
+            "Example:\n`🎬 {filename}\n\n▶️ {stream_link}`\n\n/cancel",
             parse_mode=ParseMode.MARKDOWN
         )
         return WAITING_CAPTION
@@ -450,8 +584,10 @@ async def receive_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if action == "caption":
         settings["caption"] = update.message.text
         save_settings(settings)
-        await update.message.reply_text(f"✅ *Caption update!*\n\nPreview:\n{settings['caption']}", parse_mode=ParseMode.MARKDOWN)
-
+        await update.message.reply_text(
+            f"✅ *Caption update!*\n\nPreview:\n`{settings['caption']}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
     elif action == "welcome":
         settings["welcome_msg"] = update.message.text
         save_settings(settings)
@@ -548,71 +684,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ============================================================
-#           USERBOT - BOT B SE VIDEO LENA
-# ============================================================
-
-@userbot.on_message(filters.user(BOT_B_USERNAME) & filters.video)
-async def receive_video(client: Client, message: Message):
-    if not pending_requests:
-        return
-
-    oldest_key = next(iter(pending_requests))
-    req = pending_requests.pop(oldest_key)
-    user_chat_id = req["user_chat_id"]
-    user_id = req["user_id"]
-    proc_msg_id = req["processing_msg_id"]
-    link = req["link"]
-
-    try:
-        await bot_app.bot.edit_message_text(
-            chat_id=user_chat_id,
-            message_id=proc_msg_id,
-            text="📥 Video mil gayi! Bhej raha hoon..."
-        )
-
-        video_path = await message.download()
-        filename = (message.video.file_name or "video.mp4").replace("Diskwala_File_", "").replace(".mp4", "")
-        caption = settings["caption"].format(filename=filename)
-
-        thumb_path = settings.get("thumbnail")
-        thumb = open(thumb_path, 'rb') if (thumb_path and os.path.exists(thumb_path)) else None
-
-        with open(video_path, 'rb') as vf:
-            await bot_app.bot.send_video(
-                chat_id=user_chat_id,
-                video=vf,
-                caption=caption,
-                parse_mode=ParseMode.MARKDOWN,
-                thumbnail=thumb,
-                supports_streaming=True
-            )
-
-        if thumb:
-            thumb.close()
-
-        log_download(user_id, link)
-
-        await bot_app.bot.send_message(
-            ADMIN_ID,
-            f"📥 *New Download!*\n\n"
-            f"👤 User ID: `{user_id}`\n"
-            f"🔗 Link: `{link}`\n"
-            f"📅 Time: `{datetime.now().strftime('%d/%m/%Y %H:%M')}`",
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-        await bot_app.bot.delete_message(chat_id=user_chat_id, message_id=proc_msg_id)
-        os.remove(video_path)
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await bot_app.bot.edit_message_text(
-            chat_id=user_chat_id,
-            message_id=proc_msg_id,
-            text="❌ Error aa gaya! Dobara try karo."
-        )
-
-# ============================================================
 #                         MAIN
 # ============================================================
 
@@ -637,14 +708,13 @@ async def main():
     bot_app.add_handler(admin_conv)
     bot_app.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, handle_link))
 
-    # ✅ FIX: Pehle initialize, phir start, phir polling — sahi order mein
+    # Sahi order mein initialize
     await bot_app.initialize()
     await bot_app.start()
     await bot_app.updater.start_polling()
 
     asyncio.create_task(process_queue())
 
-    # Userbot aur bot dono parallel chalenge
     await userbot.start()
 
     logger.info("✅ Bot chal raha hai!")
