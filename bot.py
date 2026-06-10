@@ -480,7 +480,6 @@ async def receive_ban_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(update.message.text.strip())
         ban_user(uid)
         await update.message.reply_text(f"🚫 User `{uid}` ban ho gaya!", parse_mode=ParseMode.MARKDOWN)
-        # Notify admin
         try:
             await context.bot.send_message(uid, "🚫 Tumhe bot se ban kar diya gaya hai. Admin se contact karo.")
         except:
@@ -591,10 +590,8 @@ async def receive_video(client: Client, message: Message):
         if thumb:
             thumb.close()
 
-        # Log download
         log_download(user_id, link)
 
-        # Admin ko notification
         await bot_app.bot.send_message(
             ADMIN_ID,
             f"📥 *New Download!*\n\n"
@@ -632,6 +629,7 @@ async def main():
             WAITING_LIMIT: [MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, receive_limit)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
     )
 
     bot_app.add_handler(CommandHandler("start", start))
@@ -639,14 +637,15 @@ async def main():
     bot_app.add_handler(admin_conv)
     bot_app.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, handle_link))
 
+    # ✅ FIX: Pehle initialize, phir start, phir polling — sahi order mein
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling()
+
     asyncio.create_task(process_queue())
 
-    await asyncio.gather(
-        userbot.start(),
-        bot_app.initialize(),
-        bot_app.start(),
-        bot_app.updater.start_polling()
-    )
+    # Userbot aur bot dono parallel chalenge
+    await userbot.start()
 
     logger.info("✅ Bot chal raha hai!")
     await asyncio.Event().wait()
