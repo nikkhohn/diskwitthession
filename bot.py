@@ -25,7 +25,8 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 123456789))
 
 BOT_B_USERNAME = "BookTherepybot"
-STREAM_BOT_USERNAME = "aishwariyaupdatesbot"  # Stream bot
+STREAM_BOT_USERNAME = "aishwariyaupdatesbot"  # Stream bot username (forward ke liye)
+STREAM_BOT_ID = 8726917363  # Stream bot numeric ID (filter ke liye)
 FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "")
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", 10))
 
@@ -372,7 +373,7 @@ async def receive_video_from_bookbot(client: Client, message: Message):
 #    → User ko link bhejo
 # ============================================================
 
-@userbot.on_message(filters.user(STREAM_BOT_USERNAME) & filters.text)
+@userbot.on_message(filters.user(STREAM_BOT_ID) & filters.text)
 async def receive_stream_link(client: Client, message: Message):
     if not stream_pending:
         logger.warning("Stream bot ne message bheja par stream_pending khali hai!")
