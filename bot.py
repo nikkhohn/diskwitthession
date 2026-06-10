@@ -192,20 +192,32 @@ bot_app = Application.builder().token(BOT_TOKEN).build()
 
 @userbot.on_message(filters.video)
 async def on_any_video(client, message):
-    """Har video message catch karo — channel wala filter karenge"""
+    """Har video message catch karo"""
     global pending_channel_event, pending_channel_result
 
-    # Sirf tera database channel ka video chahiye
     chat_id = message.chat.id
-    # Pyrogram mein private channel ID negative hoti hai same as -100xxxxx
-    if chat_id != DB_CHANNEL_ID:
+    
+    # DEBUG — har video ka chat_id log karo
+    logger.info(f"🎥 Video detected! chat_id={chat_id} | DB_CHANNEL_ID={DB_CHANNEL_ID} | msg_id={message.id}")
+
+    # Match check — dono formats try karo
+    is_our_channel = (
+        chat_id == DB_CHANNEL_ID or
+        chat_id == int(str(DB_CHANNEL_ID).replace("-100", "")) or
+        str(chat_id) == str(DB_CHANNEL_ID) or
+        str(chat_id).endswith(str(DB_CHANNEL_ID).replace("-100", ""))
+    )
+
+    if not is_our_channel:
+        logger.info(f"⏭️ Different channel, skip. chat_id={chat_id}")
         return
 
     if pending_channel_event is None:
-        return  # Koi request nahi hai abhi
+        logger.warning("⚠️ Video aai but koi pending request nahi!")
+        return
 
     # Video mil gayi!
-    logger.info(f"✅ Channel pe video detect hui! msg_id={message.id}")
+    logger.info(f"✅ Channel video matched! msg_id={message.id}")
     pending_channel_result["id"] = message.id
     pending_channel_event.set()
     pending_channel_event = None
