@@ -742,6 +742,8 @@ async def main():
             WAITING_LIMIT:     [MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, receive_limit)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
+        per_chat=True,
     )
 
     bot_app.add_handler(CommandHandler("start", start))
@@ -750,11 +752,13 @@ async def main():
     bot_app.add_handler(CallbackQueryHandler(handle_video_button, pattern="^get_video:"))
     bot_app.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, handle_link))
 
+    # Pehle initialize karo — phir start karo (order zaroori hai!)
+    await bot_app.initialize()
+
     await asyncio.gather(
         userbot.start(),
-        bot_app.initialize(),
         bot_app.start(),
-        bot_app.updater.start_polling()
+        bot_app.updater.start_polling(),
     )
 
     logger.info("✅ Bot chal raha hai!")
